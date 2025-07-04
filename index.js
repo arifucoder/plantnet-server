@@ -44,6 +44,38 @@ const client = new MongoClient(process.env.MONGODB_URI, {
 });
 async function run() {
 	try {
+		const db = client.db("phc_plantnet");
+		const plantsCollection = db.collection("plants");
+
+		app.post("/plants", async (req, res) => {
+			try {
+				const plant = req.body;
+
+				// Validation (optional)
+				if (!plant.name || !plant.image) {
+					return res.status(400).json({ message: "Missing required fields" });
+				}
+
+				const result = await plantsCollection.insertOne(plant);
+				res.send({ success: true, insertedId: result.insertedId });
+			} catch (error) {
+				console.error(error);
+				res.status(500).json({ success: false, message: "Server error" });
+			}
+		});
+		app.get("/plants", async (req, res) => {
+			try {
+				const result = await plantsCollection.find().toArray();
+				res.send(result);
+			} catch (error) {
+				console.error("Error fetching plants:", error);
+				res.status(500).send({ success: false, message: "Failed to fetch plants" });
+			}
+		});
+
+		//
+		//
+		//
 		// Generate jwt token
 		app.post("/jwt", async (req, res) => {
 			const email = req.body;
@@ -72,6 +104,9 @@ async function run() {
 				res.status(500).send(err);
 			}
 		});
+		//
+		//
+		//
 
 		// Send a ping to confirm a successful connection
 		await client.db("admin").command({ ping: 1 });
