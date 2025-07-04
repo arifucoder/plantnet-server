@@ -72,6 +72,27 @@ async function run() {
 				res.status(500).send({ success: false, message: "Failed to fetch plants" });
 			}
 		});
+		app.get("/plants/:id", async (req, res) => {
+			try {
+				const id = req.params.id;
+
+				// ID validate করা দরকার (MongoDB ObjectId হতে হবে)
+				if (!ObjectId.isValid(id)) {
+					return res.status(400).send({ message: "Invalid plant ID" });
+				}
+
+				const plant = await plantsCollection.findOne({ _id: new ObjectId(id) });
+
+				if (!plant) {
+					return res.status(404).send({ message: "Plant not found" });
+				}
+
+				res.send(plant);
+			} catch (error) {
+				console.error("Error fetching plant by ID:", error);
+				res.status(500).send({ message: "Failed to fetch plant" });
+			}
+		});
 
 		//
 		//
