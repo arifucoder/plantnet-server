@@ -1,5 +1,9 @@
 require("dotenv").config();
 const express = require("express");
+
+const Stripe = require("stripe");
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
@@ -42,10 +46,18 @@ const client = new MongoClient(process.env.MONGODB_URI, {
 		deprecationErrors: true,
 	},
 });
+
+const { router: usersRoute, setUsersCollection } = require("./routes/users.route");
+
 async function run() {
 	try {
 		const db = client.db("phc_plantnet");
 		const plantsCollection = db.collection("plants");
+		const ordersCollection = db.collection("orders");
+		const usersCollection = db.collection("users");
+
+		setUsersCollection(usersCollection);
+		app.use("/users", usersRoute);
 
 		app.post("/plants", async (req, res) => {
 			try {
@@ -93,6 +105,96 @@ async function run() {
 				res.status(500).send({ message: "Failed to fetch plant" });
 			}
 		});
+		//
+		// stripe payment
+		app.post("/create-payment-intent", async (req, res) => {
+			try {
+				const { plantId, quantity } = req.body;
+
+				if (!plantId || !quantity) {
+					return res.status(400).json({ message: "Plant ID and quantity are required" });
+				}
+
+				// validate ObjectId
+				if (!ObjectId.isValid(plantId)) {
+					return res.status(400).json({ message: "Invalid plant ID" });
+				}
+
+				// get plant from database
+				const plant = await plantsCollection.findOne({ _id: new ObjectId(plantId) });
+
+				if (!plant) {
+					return res.status(404).json({ message: "Plant not found" });
+				}
+
+				// check stock
+				if (quantity > parseInt(plant.quantity)) {
+					return res.status(400).json({ message: "Quantity exceeds available stock" });
+				}
+
+				// total price calculation
+				const totalPrice = parseInt(plant.price) * parseInt(quantity);
+				const amount = totalPrice * 100; // cents
+
+				// create payment intent
+				const paymentIntent = await stripe.paymentIntents.create({
+					amount,
+					currency: "usd",
+					payment_method_types: ["card"],
+					metadata: {
+						plantId: plantId,
+						quantity: quantity.toString(),
+					},
+				});
+
+				res.send({
+					clientSecret: paymentIntent.client_secret,
+					amount: totalPrice,
+					plantName: plant.name,
+				});
+			} catch (error) {
+				console.error("Payment Intent Error:", error);
+				res.status(500).json({ message: "Failed to create payment intent" });
+			}
+		});
+
+		app.post("/orders", verifyToken, async (req, res) => {
+			try {
+				const orderData = req.body;
+
+				if (!orderData.email || !orderData.plantId || !orderData.transactionId) {
+					return res.status(400).send({ success: false, message: "Missing required fields" });
+				}
+
+				const plant = await plantsCollection.findOne({ _id: new ObjectId(orderData.plantId) });
+
+				if (!plant) {
+					return res.status(404).send({ success: false, message: "Plant not found" });
+				}
+
+				if (parseInt(orderData.quantity) > parseInt(plant.quantity)) {
+					return res.status(400).send({ success: false, message: "Not enough stock" });
+				}
+
+				// ✅ order insert
+				orderData.created_at = new Date().toISOString();
+				const result = await ordersCollection.insertOne(orderData);
+
+				// ✅ quantity update
+				const updated = await plantsCollection.updateOne(
+					{ _id: new ObjectId(orderData.plantId) },
+					{ $inc: { quantity: -parseInt(orderData.quantity) } }
+				);
+
+				res.send({ success: true, insertedId: result.insertedId });
+			} catch (error) {
+				console.error("Error saving order:", error);
+				res.status(500).send({ success: false, message: "Failed to save order" });
+			}
+		});
+
+		// stripe payment
+		//
 
 		//
 		//
