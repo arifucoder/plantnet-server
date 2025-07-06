@@ -8,6 +8,7 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const jwt = require("jsonwebtoken");
+const verifyToken = require("./middlewares/verifyToken");
 
 const port = process.env.PORT || 3000;
 const app = express();
@@ -22,21 +23,21 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(cookieParser());
 
-const verifyToken = async (req, res, next) => {
-	const token = req.cookies?.token;
+// const verifyToken = async (req, res, next) => {
+// 	const token = req.cookies?.token;
 
-	if (!token) {
-		return res.status(401).send({ message: "unauthorized access" });
-	}
-	jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
-		if (err) {
-			console.log(err);
-			return res.status(401).send({ message: "unauthorized access" });
-		}
-		req.user = decoded;
-		next();
-	});
-};
+// 	if (!token) {
+// 		return res.status(401).send({ message: "unauthorized access" });
+// 	}
+// 	jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+// 		if (err) {
+// 			console.log(err);
+// 			return res.status(401).send({ message: "unauthorized access" });
+// 		}
+// 		req.user = decoded;
+// 		next();
+// 	});
+// };
 // console.log("JWT_SECRET:", process.env.ACCESS_TOKEN_SECRET);
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(process.env.MONGODB_URI, {
