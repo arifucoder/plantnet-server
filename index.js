@@ -8,7 +8,6 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const jwt = require("jsonwebtoken");
-const verifyToken = require("./middlewares/verifyToken");
 
 const port = process.env.PORT || 3000;
 const app = express();
@@ -23,21 +22,39 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(cookieParser());
 
-// const verifyToken = async (req, res, next) => {
-// 	const token = req.cookies?.token;
+let usersCollection;
 
-// 	if (!token) {
-// 		return res.status(401).send({ message: "unauthorized access" });
-// 	}
-// 	jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
-// 		if (err) {
-// 			console.log(err);
-// 			return res.status(401).send({ message: "unauthorized access" });
-// 		}
-// 		req.user = decoded;
-// 		next();
-// 	});
-// };
+const verifyToken = (req, res, next) => {
+	const token = req.cookies?.token;
+	if (!token) {
+		return res.status(401).send({ message: "unauthorized access" });
+	}
+	jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+		if (err) {
+			console.log("JWT Error:", err);
+			return res.status(401).send({ message: "unauthorized access" });
+		}
+		req.user = decoded;
+		next();
+	});
+};
+
+const verifyAdmin = async (req, res, next) => {
+	try {
+		const email = req.user?.email;
+		if (!email) return res.status(401).send({ message: "Unauthorized" });
+
+		const user = await usersCollection.findOne({ email });
+		if (!user || user.role !== "admin") {
+			return res.status(403).send({ message: "Forbidden: Admins only" });
+		}
+		next();
+	} catch (error) {
+		console.error("verifyAdmin error:", error);
+		res.status(500).send({ message: "Server error in verifyAdmin" });
+	}
+};
+
 // console.log("JWT_SECRET:", process.env.ACCESS_TOKEN_SECRET);
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(process.env.MONGODB_URI, {
@@ -48,34 +65,130 @@ const client = new MongoClient(process.env.MONGODB_URI, {
 	},
 });
 
-const { router: usersRoute, setUsersCollection } = require("./routes/users.route");
-
 async function run() {
 	try {
 		const db = client.db("phc_plantnet");
 		const plantsCollection = db.collection("plants");
 		const ordersCollection = db.collection("orders");
-		const usersCollection = db.collection("users");
+		usersCollection = db.collection("users");
 
-		setUsersCollection(usersCollection);
-		app.use("/users", usersRoute);
+		// ================== USERS ROUTES ==================
+		app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
+			try {
+				const filter = { email: { $ne: req?.user?.email } };
+				const users = await usersCollection.find(filter).toArray();
+				res.send(users);
+			} catch (error) {
+				console.error("Error fetching users:", error);
+				res.status(500).send({ message: "Failed to fetch users" });
+			}
+		});
+
+		app.get("/users/role/:email", verifyToken, async (req, res) => {
+			try {
+				const email = req.params.email;
+				const user = await usersCollection.findOne({ email });
+				if (!user) {
+					return res.status(404).send({ success: false, message: "User not found" });
+				}
+				res.send({ success: true, role: user.role || "customer" });
+			} catch (error) {
+				console.error("Error fetching user role:", error);
+				res.status(500).send({ success: false, message: "Failed to fetch user role" });
+			}
+		});
+
+		app.post("/users", async (req, res) => {
+			try {
+				const user = req.body;
+				if (!user?.email || !user?.name || !user?.image) {
+					return res.status(400).send({ success: false, message: "Name, email, and photo are required" });
+				}
+				const existingUser = await usersCollection.findOne({ email: user.email });
+				if (existingUser) {
+					return res.send({ success: true, existing: true, message: "User already exists", email: user.email });
+				}
+				user.role = typeof user.role === "string" ? user.role : "customer";
+				user.created_at = new Date().toISOString();
+				user.last_login_time = new Date().toISOString();
+				const result = await usersCollection.insertOne(user);
+				res.send({ success: true, insertedId: result.insertedId });
+			} catch (error) {
+				console.error("Error creating user:", error);
+				res.status(500).send({ success: false, message: "Failed to create user" });
+			}
+		});
+
+		app.patch("/users/:email", verifyToken, async (req, res) => {
+			try {
+				const email = req.params.email;
+				const updateDoc = {
+					$set: { last_login_time: req.body.last_login_time || new Date().toISOString() },
+				};
+				const result = await usersCollection.updateOne({ email }, updateDoc);
+				if (result.modifiedCount > 0) {
+					res.send({ success: true, message: "Last login time updated" });
+				} else {
+					res.status(404).send({ success: false, message: "User not found or not updated" });
+				}
+			} catch (error) {
+				console.error("Error updating login time:", error);
+				res.status(500).send({ success: false, message: "Failed to update login time" });
+			}
+		});
+
+		app.patch("/users/role/:id", verifyToken, verifyAdmin, async (req, res) => {
+			const id = req.params.id;
+			const { role } = req.body;
+			const result = await usersCollection.updateOne(
+				{ _id: new ObjectId(id) },
+				{ $set: { role: role, status: "verified" } }
+			);
+			res.send(result);
+		});
+
+		app.patch("/users/request-seller/:email", verifyToken, async (req, res) => {
+			try {
+				const email = req.params.email;
+
+				const result = await usersCollection.updateOne({ email }, { $set: { status: "requested" } });
+
+				if (result.modifiedCount > 0) {
+					res.send({ success: true, message: "Seller request submitted." });
+				} else {
+					res.status(400).send({ success: false, message: "You have requested already" });
+				}
+			} catch (error) {
+				console.error("Seller request error:", error);
+				res.status(500).send({ success: false, message: "Server error." });
+			}
+		});
 
 		app.post("/plants", async (req, res) => {
 			try {
 				const plant = req.body;
 
-				// Validation (optional)
-				if (!plant.name || !plant.image) {
+				// 1. Validation
+				if (!plant.name || !plant.image || !plant.price || !plant.quantity) {
 					return res.status(400).json({ message: "Missing required fields" });
 				}
 
+				// 2. Convert price and quantity to Number
+				plant.price = parseFloat(plant.price);
+				plant.quantity = parseInt(plant.quantity);
+
+				// 3. Add created_at timestamp
+				plant.created_at = new Date().toISOString();
+
+				// 4. Insert to DB
 				const result = await plantsCollection.insertOne(plant);
 				res.send({ success: true, insertedId: result.insertedId });
 			} catch (error) {
-				console.error(error);
+				console.error("❌ Error inserting plant:", error);
 				res.status(500).json({ success: false, message: "Server error" });
 			}
 		});
+
 		app.get("/plants", async (req, res) => {
 			try {
 				const result = await plantsCollection.find().toArray();
@@ -163,6 +276,9 @@ async function run() {
 			try {
 				const orderData = req.body;
 
+				// ✅ Extract email from customer object
+				orderData.email = orderData.customer?.email;
+
 				if (!orderData.email || !orderData.plantId || !orderData.transactionId) {
 					return res.status(400).send({ success: false, message: "Missing required fields" });
 				}
@@ -177,12 +293,13 @@ async function run() {
 					return res.status(400).send({ success: false, message: "Not enough stock" });
 				}
 
-				// ✅ order insert
+				// ✅ Add created time
 				orderData.created_at = new Date().toISOString();
-				const result = await ordersCollection.insertOne(orderData);
 
-				// ✅ quantity update
-				const updated = await plantsCollection.updateOne(
+				// ✅ Insert order
+				const result = await ordersCollection.insertOne(orderData);
+				// ✅ Update plant quantity
+				await plantsCollection.updateOne(
 					{ _id: new ObjectId(orderData.plantId) },
 					{ $inc: { quantity: -parseInt(orderData.quantity) } }
 				);
