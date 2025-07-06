@@ -21,6 +21,23 @@ router.get("/", async (req, res) => {
 	}
 });
 
+router.get("/role/:email", verifyToken, async (req, res) => {
+	try {
+		const email = req.params.email;
+
+		const user = await usersCollection.findOne({ email });
+
+		if (!user) {
+			return res.status(404).send({ success: false, message: "User not found" });
+		}
+
+		res.send({ success: true, role: user.role });
+	} catch (error) {
+		console.error("Error fetching user role:", error);
+		res.status(500).send({ success: false, message: "Failed to fetch user role" });
+	}
+});
+
 // POST - Create or Register user
 router.post("/", async (req, res) => {
 	try {
