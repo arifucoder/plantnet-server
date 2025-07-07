@@ -67,11 +67,18 @@ const client = new MongoClient(process.env.MONGODB_URI, {
 
 async function run() {
 	try {
+		await client.connect();
 		const db = client.db("phc_plantnet");
 		const plantsCollection = db.collection("plants");
 		const ordersCollection = db.collection("orders");
 		usersCollection = db.collection("users");
 
+		app.get("/admin-stats", async (req, res) => {
+			const totalUsers = await usersCollection.estimatedDocumentCount();
+			const totalPlants = await plantsCollection.estimatedDocumentCount();
+			const totalOrders = await ordersCollection.estimatedDocumentCount();
+			res.send({ totalUsers, totalPlants, totalOrders });
+		});
 		// ================== USERS ROUTES ==================
 		app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
 			try {
