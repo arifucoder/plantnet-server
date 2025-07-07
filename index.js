@@ -73,12 +73,52 @@ async function run() {
 		const ordersCollection = db.collection("orders");
 		usersCollection = db.collection("users");
 
-		app.get("/admin-stats", async (req, res) => {
-			const totalUsers = await usersCollection.estimatedDocumentCount();
-			const totalPlants = await plantsCollection.estimatedDocumentCount();
-			const totalOrders = await ordersCollection.estimatedDocumentCount();
-			res.send({ totalUsers, totalPlants, totalOrders });
+		app.get("/admin-stats", verifyToken, verifyAdmin, async (req, res) => {
+			try {
+				const totalUsers = await usersCollection.estimatedDocumentCount();
+				const totalPlants = await plantsCollection.estimatedDocumentCount();
+
+				const orderStats = await ordersCollection
+					.aggregate([
+						{
+							$group: {
+								_id: {
+									$dateToString: { format: "%Y-%m-%d", date: { $toDate: "$created_at" } },
+								},
+								totalOrders: { $sum: 1 },
+								revenue: { $sum: "$total" },
+							},
+						},
+						{ $sort: { _id: 1 } },
+						{
+							$project: {
+								_id: 0,
+								date: "$_id",
+								totalOrders: 1,
+								revenue: 1,
+							},
+						},
+					])
+					.toArray();
+
+				// ✅ Safe fallback
+				const totalOrders = orderStats?.length ? orderStats.reduce((sum, d) => sum + d.totalOrders, 0) : 0;
+
+				const totalSalesAmount = orderStats?.length ? orderStats.reduce((sum, d) => sum + d.revenue, 0) : 0;
+
+				res.send({
+					totalUsers,
+					totalPlants,
+					totalOrders,
+					totalSalesAmount,
+					dayWiseOrders: orderStats,
+				});
+			} catch (error) {
+				console.error("Admin stats error:", error);
+				res.status(500).send({ message: "Failed to load admin stats" });
+			}
 		});
+
 		// ================== USERS ROUTES ==================
 		app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
 			try {
